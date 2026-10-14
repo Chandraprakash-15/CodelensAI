@@ -1,0 +1,246 @@
+package codelens_backend;
+
+import java.io.IOException;
+import java.lang.reflect.Field;
+import java.lang.reflect.Modifier;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.IdentityHashMap;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+
+/**
+ * Runtime tracer compiled alongside the user's program (source is loaded from
+ * this template by CodeController.writeTracerClass).
+ *
+ * LINKED-LIST SNAPSHOT SAFETY PROPERTIES
+ *  1. Nodes are detected structurally via reflection: a class declaring a
+ *     non-static  int val  and a non-static  <SameClass> next.
+ *  2. No user method is ever invoked for list nodes - toString() is NOT called
+ *     for them, and the chain is walked by reading the 'next' field only.
+ *  3. 'val' is read with Field.getInt() - no string conversion.
+ *  4. Walks are bounded by MAX_LIST_NODES per snapshot (global, across all
+ *     pointer variables) and cycles are detected with identity sets.
+ *  5. Node ids are 'node-N', allocated from an identity-keyed registry, so the
+ *     same runtime object always has the same id within one execution.
+ *  6. step() is guarded against re-entrancy: if any code run while capturing
+ *     (e.g. a user toString() on a non-list object) calls step() again, the
+ *     nested call is ignored instead of adding extra trace steps.
+ *  7. Every reflective operation is wrapped - tracer failure is silent.
+ */
+public class CodeLensTracer {
+
+    private static final List<String> STEPS = Collections.synchronizedList(new ArrayList<>());
+    private static final int MAX_STEPS = 5000;
+    private static final int MAX_LIST_NODES = 50;
+
+    // Separators used in the trace line for the linked-list payload
+    private static final String LL_MARK = "\u0007";   // precedes the snapshot payload
+    private static final String SEC = "\u0006";       // section separator
+    private static final String ENT = "\u0001";       // entry separator
+    private static final String FLD = "\u0002";       // field separator
+
+    // identity-keyed (NOT hashCode-keyed) -> no collisions, no address exposure
+    private static final Map<Object, String> NODE_IDS = new IdentityHashMap<>();
+    private static int nodeCounter = 0;
+
+    // reflection cache: class -> [valField, nextField] (empty array = not a list node)
+    private static final Map<Class<?>, Field[]> NODE_FIELDS = new HashMap<>();
+    private static final Field[] NOT_A_NODE = new Field[0];
+
+    // names of variables that have held a list node at some point (lets us
+    // report null pointers such as prev = null)
+    private static final Set<String> NODE_VAR_NAMES = new HashSet<>();
+
+    private static final ThreadLocal<Boolean> IN_STEP = new ThreadLocal<>();
+
+    static {
+        Runtime.getRuntime().addShutdownHook(new Thread(CodeLensTracer::flush));
+    }
+
+    private static synchronized Field[] listFields(Class<?> cls) {
+        Field[] cached = NODE_FIELDS.get(cls);
+        if (cached != null) return cached == NOT_A_NODE ? null : cached;
+        Field[] result = NOT_A_NODE;
+        try {
+            Field valField = cls.getDeclaredField("val");
+            Field nextField = cls.getDeclaredField("next");
+            if (valField.getType() == int.class && nextField.getType() == cls
+                    && !Modifier.isStatic(valField.getModifiers())
+                    && !Modifier.isStatic(nextField.getModifiers())) {
+                valField.setAccessible(true);
+                nextField.setAccessible(true);
+                result = new Field[] { valField, nextField };
+            }
+        } catch (Throwable ignored) {
+            // not a list node
+        }
+        NODE_FIELDS.put(cls, result);
+        return result == NOT_A_NODE ? null : result;
+    }
+
+    private static Field[] listFieldsOf(Object obj) {
+        return obj == null ? null : listFields(obj.getClass());
+    }
+
+    private static String nodeId(Object obj) {
+        String id = NODE_IDS.get(obj);
+        if (id == null) {
+            id = "node-" + (++nodeCounter);
+            NODE_IDS.put(obj, id);
+        }
+        return id;
+    }
+
+    /**
+     * Builds the snapshot payload (no JSON, no user code):
+     *   truncated(0|1) SEC cycle(0|1) SEC nodes SEC pointers
+     *   nodes    = id FLD val FLD nextId   joined by ENT   (nextId empty = null)
+     *   pointers = name FLD id             joined by ENT   (id empty = null)
+     */
+    private static synchronized String captureListSnapshot(Map<String, Object> pointerVars) {
+        try {
+            Map<Object, Boolean> seen = new IdentityHashMap<>();
+            List<Object> ordered = new ArrayList<>();
+            boolean truncated = false;
+            boolean cycle = false;
+
+            for (Object start : pointerVars.values()) {
+                Map<Object, Boolean> walk = new IdentityHashMap<>();
+                Object cur = start;
+                while (cur != null) {
+                    Field[] f = listFields(cur.getClass());
+                    if (f == null) break;
+                    if (walk.containsKey(cur)) { cycle = true; break; }  // came back to a node of this walk
+                    if (seen.containsKey(cur)) break;                    // merged into an earlier walk
+                    if (ordered.size() >= MAX_LIST_NODES) { truncated = true; break; }
+                    walk.put(cur, Boolean.TRUE);
+                    seen.put(cur, Boolean.TRUE);
+                    ordered.add(cur);
+                    cur = f[1].get(cur);
+                }
+            }
+
+            StringBuilder nodes = new StringBuilder();
+            for (int i = 0; i < ordered.size(); i++) {
+                Object n = ordered.get(i);
+                Field[] f = listFields(n.getClass());
+                if (i > 0) nodes.append(ENT);
+                Object nxt = f[1].get(n);
+                nodes.append(nodeId(n)).append(FLD)
+                     .append(f[0].getInt(n)).append(FLD)
+                     .append(nxt != null ? nodeId(nxt) : "");
+            }
+
+            StringBuilder ptrs = new StringBuilder();
+            boolean first = true;
+            for (Map.Entry<String, Object> e : pointerVars.entrySet()) {
+                if (!first) ptrs.append(ENT);
+                first = false;
+                ptrs.append(e.getKey()).append(FLD)
+                    .append(e.getValue() != null ? nodeId(e.getValue()) : "");
+            }
+
+            return (truncated ? "1" : "0") + SEC + (cycle ? "1" : "0") + SEC + nodes + SEC + ptrs;
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    private static String escape(String s) {
+        return s.replace("\\", "\\\\").replace("\n", "\\n").replace("\r", "\\r");
+    }
+
+    public static void step(int line) {
+        step(line, (Object[]) null);
+    }
+
+    public static void step(int line, Object... varPairs) {
+        if (STEPS.size() >= MAX_STEPS) return;
+        if (IN_STEP.get() != null) return; // re-entrancy guard
+        IN_STEP.set(Boolean.TRUE);
+        try {
+            StringBuilder sb = new StringBuilder();
+            sb.append(line);
+            Map<String, Object> pointerVars = new LinkedHashMap<>();
+            if (varPairs != null && varPairs.length > 0) {
+                sb.append("\t");
+                for (int i = 0; i < varPairs.length; i += 2) {
+                    if (i > 0) sb.append("\u0001");
+                    String name = String.valueOf(varPairs[i]);
+                    Object val = (i + 1 < varPairs.length) ? varPairs[i + 1] : null;
+                    sb.append(name).append("\u0002");
+                    if (val == null) {
+                        sb.append("null\u0003null");
+                        synchronized (CodeLensTracer.class) {
+                            if (NODE_VAR_NAMES.contains(name)) pointerVars.put(name, null);
+                        }
+                    } else if (val instanceof Integer || val instanceof Long || val instanceof Short || val instanceof Byte) {
+                        sb.append("int\u0003").append(val.toString());
+                    } else if (val instanceof Double || val instanceof Float) {
+                        sb.append("double\u0003").append(val.toString());
+                    } else if (val instanceof Boolean) {
+                        sb.append("boolean\u0003").append(val.toString());
+                    } else if (val instanceof Character) {
+                        sb.append("char\u0003").append(val.toString());
+                    } else if (val instanceof String) {
+                        sb.append("string\u0003").append(escape((String) val));
+                    } else {
+                        Field[] nf = listFields(val.getClass());
+                        if (nf != null) {
+                            // list node: describe from fields only, never call user toString()
+                            pointerVars.put(name, val);
+                            synchronized (CodeLensTracer.class) { NODE_VAR_NAMES.add(name); }
+                            String shown = val.getClass().getSimpleName() + "(" + nf[0].getInt(val) + ")";
+                            sb.append("object\u0003").append(escape(shown));
+                        } else {
+                            sb.append("object\u0003").append(escape(val.toString()));
+                        }
+                    }
+                }
+            }
+            if (!pointerVars.isEmpty()) {
+                String snapshot = captureListSnapshot(pointerVars);
+                if (snapshot != null) {
+                    sb.append(LL_MARK).append(snapshot);
+                }
+            }
+            STEPS.add(sb.toString());
+        } catch (Throwable ignored) {
+        } finally {
+            IN_STEP.remove();
+        }
+    }
+
+    public static void flush() {
+        String traceFile = System.getProperty("codelens.trace.file");
+        if (traceFile == null || traceFile.isBlank()) return;
+        try {
+            StringBuilder sb = new StringBuilder();
+            synchronized (STEPS) {
+                for (String s : STEPS) {
+                    sb.append(s).append(System.lineSeparator());
+                }
+            }
+            Files.writeString(
+                    Path.of(traceFile),
+                    sb.toString(),
+                    StandardCharsets.UTF_8,
+                    StandardOpenOption.CREATE,
+                    StandardOpenOption.TRUNCATE_EXISTING
+            );
+        } catch (Throwable ignored) {}
+    }
+
+    public static void clear() {
+        STEPS.clear();
+    }
+}

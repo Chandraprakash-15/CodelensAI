@@ -1,0 +1,87 @@
+@import "tailwindcss";
+
+@layer base {
+  html {
+    scroll-behavior: smooth;
+    overflow-x: hidden;
+    overflow-y: auto;
+    height: 100%;
+  }
+
+  body {
+    background-color: #090d16;
+    color: #f1f5f9;
+    font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+    min-height: 100vh;
+    overflow-x: hidden;
+    overflow-y: auto;
+    margin: 0;
+    padding: 0;
+  }
+
+  #root {
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+}
+
+/* Custom scrollbars */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: #0f172a;
+}
+::-webkit-scrollbar-thumb {
+  background: #334155;
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #475569;
+}
+
+/* Monaco Line Highlight Decoration */
+.monaco-execution-line-highlight {
+  background: linear-gradient(90deg, rgba(6, 182, 212, 0.22) 0%, rgba(59, 130, 246, 0.12) 100%) !important;
+  border-left: 4px solid #06b6d4 !important;
+  box-shadow: 0 0 12px rgba(6, 182, 212, 0.2);
+}
+
+.monaco-execution-line-highlight-glyph {
+  background: #06b6d4;
+  width: 8px !important;
+  height: 8px !important;
+  border-radius: 50%;
+  margin-left: 5px;
+  margin-top: 5px;
+  box-shadow: 0 0 8px #06b6d4;
+}
+
+/* Monaco Compiler / Runtime Error Highlight */
+.monaco-error-line-highlight {
+  background: linear-gradient(90deg, rgba(239, 68, 68, 0.28) 0%, rgba(244, 63, 94, 0.12) 100%) !important;
+  border-left: 4px solid #ef4444 !important;
+  box-shadow: 0 0 12px rgba(239, 68, 68, 0.25);
+}
+
+.monaco-error-line-highlight-glyph {
+  background: #ef4444;
+  width: 8px !important;
+  height: 8px !important;
+  border-radius: 50%;
+  margin-left: 5px;
+  margin-top: 5px;
+  box-shadow: 0 0 8px #ef4444;
+}
+
+/* Pulse animation for active pointers */
+@keyframes pointer-pulse {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-4px); }
+}
+
+.animate-pointer-bounce {
+  animation: pointer-pulse 1.2s infinite ease-in-out;
+}
