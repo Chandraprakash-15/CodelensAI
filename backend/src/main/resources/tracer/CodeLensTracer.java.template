@@ -71,18 +71,30 @@ public class CodeLensTracer {
         if (cached != null) return cached == NOT_A_NODE ? null : cached;
         Field[] result = NOT_A_NODE;
         try {
-            Field valField = cls.getDeclaredField("val");
-            Field nextField = cls.getDeclaredField("next");
-            if (valField.getType() == int.class && nextField.getType() == cls
-                    && !Modifier.isStatic(valField.getModifiers())
+            // Try common value field names: "val", "data", "value"
+            Field valField = null;
+            for (String candidateName : new String[]{"val", "data", "value"}) {
+                try {
+                    Field f = cls.getDeclaredField(candidateName);
+                    if (f.getType() == int.class && !Modifier.isStatic(f.getModifiers())) {
+                        valField = f;
+                        break;
+                    }
+                } catch (NoSuchFieldException ignored) {}
+            }
+            Field nextField = null;
+            try { nextField = cls.getDeclaredField("next"); } catch (NoSuchFieldException ignored) {}
+            if (nextField == null) {
+                try { nextField = cls.getDeclaredField("nextNode"); } catch (NoSuchFieldException ignored) {}
+            }
+            if (valField != null && nextField != null
+                    && nextField.getType() == cls
                     && !Modifier.isStatic(nextField.getModifiers())) {
                 valField.setAccessible(true);
                 nextField.setAccessible(true);
                 result = new Field[] { valField, nextField };
             }
-        } catch (Throwable ignored) {
-            // not a list node
-        }
+        } catch (Throwable ignored) {}
         NODE_FIELDS.put(cls, result);
         return result == NOT_A_NODE ? null : result;
     }

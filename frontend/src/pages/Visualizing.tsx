@@ -4,6 +4,8 @@ import { CodeEditor } from '../components/CodeEditor';
 import { VisualizationPanel } from '../components/VisualizationPanel';
 import { OutputPanel } from '../components/OutputPanel';
 import { ResizableSplitPane } from '../components/ResizableSplitPane';
+import { CodeAnalysisPanel } from '../components/CodeAnalysisPanel';
+import { analyzeCode, listAvailableModels } from '../services/geminiService';
 import { VALID_PALINDROME_META } from '../data/problems/validPalindrome';
 import {
   Play,
@@ -11,8 +13,11 @@ import {
   Sparkles,
   Loader2,
   RotateCcw,
+  Brain,
 } from 'lucide-react';
 import type { ExecutionState, ExecutionResponse, ExecutionStepItem } from '../types';
+import type { CodeAnalysis } from '../services/geminiService';
+import type { AnalysisStatus } from '../components/CodeAnalysisPanel';
 
 export const VisualizingPage: React.FC = () => {
   // ─── Editor / Execution State ──────────────────────────────────────────────
@@ -26,7 +31,13 @@ export const VisualizingPage: React.FC = () => {
   const [steps, setSteps] = useState<ExecutionStepItem[]>([]);
   const [currentStepIndex, setCurrentStepIndex] = useState<number>(0);
 
-  // ─── Handlers ──────────────────────────────────────────────────────────────
+  // ─── AI Analysis State ─────────────────────────────────────────────────────
+  const [analysisStatus, setAnalysisStatus] = useState<AnalysisStatus>('idle');
+  const [analysis, setAnalysis] = useState<CodeAnalysis | null>(null);
+  const [analysisError, setAnalysisError] = useState<string | null>(null);
+  const [resolvedModel, setResolvedModel] = useState<string | null>(null);
+
+  // ─── Execution Handlers ────────────────────────────────────────────────────
 
   const handleCodeChange = useCallback((newVal: string | undefined) => {
     const updatedCode = newVal ?? '';
@@ -37,12 +48,53 @@ export const VisualizingPage: React.FC = () => {
     setErrorLine(null);
     setSteps([]);
     setCurrentStepIndex(0);
+    // Reset analysis when code changes
+    setAnalysisStatus('idle');
+    setAnalysis(null);
+    setAnalysisError(null);
   }, []);
 
   const handleResetCode = useCallback(() => {
     handleCodeChange(VALID_PALINDROME_META.starterCode);
     setStdin('');
   }, [handleCodeChange]);
+
+  /** Trigger Gemini analysis for the given code (fire-and-forget alongside execution) */
+  const triggerAnalysis = useCallback(async (codeToAnalyze: string) => {
+    setAnalysisStatus('loading');
+    setAnalysis(null);
+    setAnalysisError(null);
+    try {
+      // Resolve model name for display (first call caches it internally)
+      const models = await listAvailableModels();
+      if (models.length > 0 && !resolvedModel) {
+        // The service picks the best model; just show the first found name
+        const preferredNames = [
+          'models/gemini-2.0-flash',
+          'models/gemini-2.0-flash-lite',
+          'models/gemini-1.5-flash',
+          'models/gemini-1.5-flash-8b',
+          'models/gemini-1.5-pro',
+        ];
+        for (const p of preferredNames) {
+          if (models.includes(p)) {
+            setResolvedModel(p.replace('models/', ''));
+            break;
+          }
+        }
+        if (!resolvedModel && models[0]) {
+          setResolvedModel(models[0].replace('models/', ''));
+        }
+      }
+
+      const result = await analyzeCode(codeToAnalyze);
+      setAnalysis(result);
+      setAnalysisStatus('done');
+    } catch (err: any) {
+      setAnalysisError(err?.message ?? 'Unknown error from Gemini');
+      setAnalysisStatus('error');
+    }
+  }, [resolvedModel]);
 
   const handleRunCode = async () => {
     if (executionState === 'RUNNING') return;
@@ -53,6 +105,9 @@ export const VisualizingPage: React.FC = () => {
     setErrorLine(null);
     setSteps([]);
     setCurrentStepIndex(0);
+
+    // Start AI analysis in parallel (don't await — runs alongside execution)
+    triggerAnalysis(code);
 
     try {
       const res = await fetch('/api/execution/run', {
@@ -97,7 +152,9 @@ export const VisualizingPage: React.FC = () => {
     } catch (err: any) {
       console.error('Execution request error:', err);
       setExecutionState('RUNTIME_ERROR');
-      setError(`Backend Communication Error:\n${err?.message || 'Could not connect to backend service'}`);
+      setError(
+        `Backend Communication Error:\n${err?.message || 'Could not connect to backend service'}`
+      );
       setOutput('');
       setSteps([]);
       setCurrentStepIndex(0);
@@ -131,10 +188,22 @@ export const VisualizingPage: React.FC = () => {
 
       <main className="flex-1 flex flex-col px-4 md:px-6 pb-6 pt-5 gap-4 max-w-[1800px] w-full mx-auto">
         {/* ── Header ─────────────────────────────────────────────────────── */}
-        <div className="flex items-center justify-between">
+        <div className="flex items-center justify-between flex-wrap gap-3">
           <div>
-            <h1 className="text-lg font-bold text-white tracking-tight">
+            <h1 className="text-lg font-bold text-white tracking-tight flex items-center gap-2">
               Code Visualizer
+              {analysisStatus === 'loading' && (
+                <span className="inline-flex items-center gap-1 text-xs font-normal text-cyan-400 bg-cyan-500/10 border border-cyan-500/20 px-2 py-0.5 rounded-full">
+                  <Brain className="w-3 h-3 animate-pulse" />
+                  AI analyzing…
+                </span>
+              )}
+              {analysisStatus === 'done' && (
+                <span className="inline-flex items-center gap-1 text-xs font-normal text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-2 py-0.5 rounded-full">
+                  <Sparkles className="w-3 h-3" />
+                  Analysis ready
+                </span>
+              )}
             </h1>
             <p className="text-xs text-slate-400 mt-0.5">
               Paste your Java code, run it, and step through the execution trace.
@@ -182,10 +251,11 @@ export const VisualizingPage: React.FC = () => {
                   ? `Execution trace ready (${steps.length} steps)`
                   : 'Compile and run successfully first to unlock visualization'
               }
-              className={`inline-flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-semibold transition-all border ${executionState === 'SUCCESS' && steps.length > 0
+              className={`inline-flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-semibold transition-all border ${
+                executionState === 'SUCCESS' && steps.length > 0
                   ? 'bg-slate-800 hover:bg-slate-700 text-cyan-300 border-cyan-500/40 shadow-md shadow-cyan-500/10 active:scale-95'
                   : 'bg-slate-900/60 text-slate-500 border-slate-800/80 cursor-not-allowed opacity-60'
-                }`}
+              }`}
             >
               {executionState === 'SUCCESS' && steps.length > 0 ? (
                 <>
@@ -206,8 +276,8 @@ export const VisualizingPage: React.FC = () => {
         <div className="flex-1 min-h-0">
           <ResizableSplitPane
             initialSplit={52}
-            minLeftPercentage={30}
-            maxLeftPercentage={70}
+            minLeftPercentage={25}
+            maxLeftPercentage={75}
             left={
               <div className="h-full flex flex-col">
                 <CodeEditor
@@ -219,7 +289,15 @@ export const VisualizingPage: React.FC = () => {
               </div>
             }
             right={
-              <div className="h-full flex flex-col gap-4">
+              <div className="h-full flex flex-col gap-4 overflow-y-auto pr-1">
+                {/* AI Analysis Panel — shown first so it's prominent */}
+                <CodeAnalysisPanel
+                  status={analysisStatus}
+                  analysis={analysis}
+                  error={analysisError}
+                  modelName={resolvedModel}
+                />
+
                 <OutputPanel
                   status={executionState}
                   output={output}
