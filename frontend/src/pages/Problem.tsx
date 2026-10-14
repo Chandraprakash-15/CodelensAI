@@ -23,10 +23,10 @@ import type { ExecutionState, ExecutionResponse, ExecutionStepItem } from '../ty
 
 // ─── Section IDs (for anchor navigation / aria) ─────────────────────────────
 const SECTIONS = [
-  { id: 'problem',    icon: BookOpen,  label: 'Problem'    },
-  { id: 'approach',   icon: Lightbulb, label: 'Approach'   },
+  { id: 'problem', icon: BookOpen, label: 'Problem' },
+  { id: 'approach', icon: Lightbulb, label: 'Approach' },
   { id: 'complexity', icon: BarChart2, label: 'Complexity' },
-  { id: 'practice',   icon: Code2,     label: 'Practice'   },
+  { id: 'practice', icon: Code2, label: 'Practice' },
 ] as const;
 
 export const ProblemPage: React.FC = () => {
@@ -176,11 +176,10 @@ export const ProblemPage: React.FC = () => {
                 key={id}
                 type="button"
                 onClick={() => scrollToSection(id)}
-                className={`flex items-center gap-1.5 px-3.5 py-3 text-xs font-semibold whitespace-nowrap border-b-2 transition-all ${
-                  activeSection === id
+                className={`flex items-center gap-1.5 px-3.5 py-3 text-xs font-semibold whitespace-nowrap border-b-2 transition-all ${activeSection === id
                     ? 'border-cyan-400 text-cyan-300'
                     : 'border-transparent text-slate-400 hover:text-slate-200 hover:border-slate-600'
-                }`}
+                  }`}
               >
                 <Icon className="w-3.5 h-3.5" />
                 {label}
@@ -297,11 +296,10 @@ export const ProblemPage: React.FC = () => {
                     ? `Execution trace ready (${steps.length} steps)`
                     : 'Compile and run successfully first to unlock visualization'
                 }
-                className={`inline-flex items-center gap-2 px-4 py-2.5 rounded-lg text-xs md:text-sm font-semibold transition-all border ${
-                  executionState === 'SUCCESS' && steps.length > 0
+                className={`inline-flex items-center gap-2 px-4 py-2.5 rounded-lg text-xs md:text-sm font-semibold transition-all border ${executionState === 'SUCCESS' && steps.length > 0
                     ? 'bg-slate-800 hover:bg-slate-700 text-cyan-300 border-cyan-500/40 shadow-md shadow-cyan-500/10 active:scale-95'
                     : 'bg-slate-900/60 text-slate-500 border-slate-800/80 cursor-not-allowed opacity-60'
-                }`}
+                  }`}
               >
                 {executionState === 'SUCCESS' && steps.length > 0 ? (
                   <>
@@ -311,7 +309,7 @@ export const ProblemPage: React.FC = () => {
                 ) : (
                   <>
                     <Lock className="w-3.5 h-3.5 text-slate-500" />
-                    <span>Visualize 🔒</span>
+                    <span>Visualize</span>
                   </>
                 )}
               </button>

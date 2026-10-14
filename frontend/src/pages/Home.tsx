@@ -37,7 +37,7 @@ export const Home: React.FC = () => {
 
         {/* Primary CTA */}
         <Link
-          to="/problem/valid-palindrome"
+          to="/visualizing"
           className="inline-flex items-center gap-3 px-7 py-3.5 rounded-xl bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-slate-950 font-bold text-base shadow-xl shadow-cyan-500/25 hover:shadow-cyan-500/40 transition-all duration-300 group hover:-translate-y-0.5 active:translate-y-0"
         >
           <span>Start Visualizing</span>
